@@ -1,30 +1,15 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { 
-  Upload, 
-  X, 
-  Zap, 
-  Wand2, 
-  Sparkles,
-  Trash2,
-  Download,
-  RefreshCw,
-  Rocket,
-  Image as ImageIcon,
-  AlertTriangle,
-  Flame,
-  Activity,
-  Settings,
-  Key,
-  Check,
-  ShieldAlert,
-  Smartphone,
-  Monitor
+  Upload, X, Zap, Wand2, Sparkles, Trash2, Download, 
+  RefreshCw, Rocket, Image as ImageIcon, AlertTriangle, 
+  Flame, Activity, Settings, Key, Check, ShieldAlert, 
+  Smartphone, Monitor, Layers, Edit3, Type, Sticker, Palette
 } from 'lucide-react';
 import { AspectRatio, GeneratedImage, MODEL_IDS } from './types';
 
-// --- IndexedDB Helpers (Banco de Dados Local) ---
+// --- IndexedDB Helpers ---
 const DB_NAME = 'ImaginarioStudioDB';
 const STORE_NAME = 'images';
 const DB_VERSION = 1;
@@ -37,10 +22,8 @@ const initDB = (): Promise<IDBDatabase | null> => {
     }
     try {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
-      
       request.onerror = () => resolve(null);
       request.onsuccess = () => resolve(request.result);
-      
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -136,28 +119,34 @@ const STORAGE_KEYS = {
   API_KEY: 'imaginario_custom_api_key'
 };
 
-// Modificadores extremos para complexidade visual e alta fidelidade
 const QUALITY_MODIFIERS = " . hyper-maximalist masterpiece, 8k UHD, intricate details, complex geometric patterns, volumetric cinematic lighting, unreal engine 5 render, sharp focus, rich textures, vivid deep colors, award winning photography, ray tracing, global illumination";
+
+// Estilos Pré-definidos
+const STYLES = {
+  FREE: { label: 'Prompt', icon: <Edit3 size={18} />, prompt: "" },
+  STICKER: { label: 'Figura', icon: <Sticker size={18} />, prompt: " . die-cut sticker, vector art, cute, white border, flat color, simple shading, isolated on white background" },
+  LOGO: { label: 'Logo', icon: <Type size={18} />, prompt: " . minimalist logo design, vector graphics, flat design, geometric shapes, professional brand identity, isolated" },
+  COMIC: { label: 'Desenho', icon: <Palette size={18} />, prompt: " . comic book style, halftone patterns, vibrant colors, bold outlines, graphic novel aesthetic, action dynamic" },
+};
+
+type StyleKey = keyof typeof STYLES;
+type Mode = 'create' | 'edit';
 
 const App: React.FC = () => {
   // --- State ---
-  // Default to Turbo (Fast) mode for better user experience unless changed
+  const [activeMode, setActiveMode] = useState<Mode>('create');
+  const [selectedStyle, setSelectedStyle] = useState<StyleKey>('FREE');
+  
   const [isTurboMode, setIsTurboMode] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEYS.TURBO);
     return stored !== null ? stored === 'true' : true; 
   });
-  const [isMagicPrompt, setIsMagicPrompt] = useState(() => 
-    localStorage.getItem(STORAGE_KEYS.MAGIC) === 'true'
-  );
-
-  // Inicializa com a chave salva (se existir) ou vazio para usar a process.env.API_KEY
   const [userApiKey, setUserApiKey] = useState(() => 
     localStorage.getItem(STORAGE_KEYS.API_KEY) || ''
   );
   
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState('');
-
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.WIDE_PORTRAIT);
   const [referenceImage, setReferenceImage] = useState<{ file: File, preview: string, base64: string } | null>(null);
@@ -165,16 +154,27 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
 
   // --- Effects ---
   useEffect(() => { localStorage.setItem(STORAGE_KEYS.TURBO, String(isTurboMode)); }, [isTurboMode]);
-  useEffect(() => { localStorage.setItem(STORAGE_KEYS.MAGIC, String(isMagicPrompt)); }, [isMagicPrompt]);
 
   useEffect(() => {
     getImagesFromDB().then(images => {
-      if (images.length > 0) setGeneratedImages(images);
+      if (images.length > 0) {
+        setGeneratedImages(images);
+        setSelectedImageId(images[0].id);
+      }
     });
   }, []);
+
+  // Reset reference image when switching modes if needed, or keep it
+  useEffect(() => {
+    if (activeMode === 'create') {
+      // Optional: Clear reference when going to create mode? 
+      // Let's keep it flexible, but 'Edit' implies using a reference.
+    }
+  }, [activeMode]);
 
   // --- Handlers ---
   const handleOpenSettings = () => {
@@ -195,6 +195,8 @@ const App: React.FC = () => {
         const preview = await fileToDataUrl(file);
         const base64 = await fileToBase64(file);
         setReferenceImage({ file, preview, base64 });
+        // Se o usuário fez upload, vamos supor que ele quer "editar" ou usar referência
+        if (activeMode === 'create') setActiveMode('edit');
       } catch (e) {
         console.error("Err ref img", e);
       }
@@ -203,30 +205,19 @@ const App: React.FC = () => {
 
   const handleDeleteImage = async (id: string) => {
       await deleteFromDB(id);
-      setGeneratedImages(prev => prev.filter(img => img.id !== id));
-  };
-
-  const enhancePromptAI = async (inputPrompt: string, ai: GoogleGenAI): Promise<string> => {
-    try {
-      // Solicita uma descrição mais complexa e artística
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Rewrite this image prompt to be extremely descriptive, focusing on complex details, lighting, and artistic composition. Make it sophisticated. Input: "${inputPrompt}"`,
-      });
-      return response.text || inputPrompt;
-    } catch (e) {
-      return inputPrompt; // Fail gracefully
-    }
+      const remaining = generatedImages.filter(img => img.id !== id);
+      setGeneratedImages(remaining);
+      if (selectedImageId === id) {
+        setSelectedImageId(remaining[0]?.id || null);
+      }
   };
 
   const generateImage = async () => {
     if (!prompt.trim()) return;
     
-    // Prioriza a chave do usuário, depois tenta a do ambiente
     const apiKey = userApiKey || process.env.API_KEY;
-
     if (!apiKey) {
-      setErrorMsg("Configuração Necessária: Chave API ausente. O sistema não detectou uma chave válida.");
+      setErrorMsg("Configuração Necessária: Chave API ausente.");
       setShowSettings(true);
       return;
     }
@@ -238,45 +229,37 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      let finalPrompt = prompt;
+      // Combinar prompt do usuário com o estilo selecionado
+      let finalPrompt = prompt + STYLES[selectedStyle].prompt + QUALITY_MODIFIERS;
 
-      // 1. Magic Prompt (Se ativado ou prompt curto, aumenta a complexidade)
-      if ((isMagicPrompt || prompt.length < 30) && !referenceImage) {
-         setGenerationStatus('✨ Maximizando Complexidade...');
-         finalPrompt = await enhancePromptAI(prompt, ai);
-      }
+      // Lógica de seleção de modelo
+      // Se estamos em modo EDIT (com imagem) ou Turbo -> Flash
+      // Se estamos em modo CREATE (sem imagem) e formato específico -> Imagen HQ
       
-      // Adiciona sufixos de alta fidelidade
-      finalPrompt += QUALITY_MODIFIERS;
+      const isSquare = aspectRatio === AspectRatio.SQUARE;
+      const hasReference = !!referenceImage;
+      
+      // Força Imagen HQ se não tiver referência E (não for quadrado OU não estiver em modo turbo)
+      // Nota: Imagen 4 é o único que faz 16:9 / 9:16 nativo de alta qualidade sem distorção
+      const forceHqForQuality = !hasReference && (!isTurboMode || !isSquare);
+      
+      // Se tiver referência, SOMENTE o Flash suporta image-to-image via API atualmente de forma fácil
+      // (Imagen 3/4 image-to-image é via Vertex AI, aqui estamos usando @google/genai studio wrapper)
+      const useFlash = !forceHqForQuality || hasReference;
 
       let imageUrl = '';
       let usedModel = '';
 
-      // LÓGICA DE SELEÇÃO DE MODELO E FORMATO
-      // Gemini Flash Image (Turbo) gera nativamente 1:1 (Quadrado).
-      // Para garantir formatos como 9:16 ou 16:9, usamos o Imagen 4.
-      // Se o usuário tiver uma imagem de referência, usamos Flash (pela API atual).
-
-      const isSquare = aspectRatio === AspectRatio.SQUARE;
-      const hasReference = !!referenceImage;
-      
-      // Forçamos HQ se o usuário quer um formato específico (não quadrado) E não está usando referência
-      // Isso garante que o 9:16 seja realmente 9:16
-      const forceHqForAspectRatio = !isSquare && !hasReference;
-      
-      const useFlash = (isTurboMode && !forceHqForAspectRatio) || hasReference;
-
       if (useFlash) {
-        setGenerationStatus('⚡ Gerando (Turbo)...');
+        setGenerationStatus(hasReference ? '🎨 Editando Imagem...' : '⚡ Gerando (Turbo)...');
         usedModel = MODEL_IDS.FAST_REFERENCE;
         
-        // Colocamos o Aspect Ratio no começo para tentar forçar o modelo Flash, caso seja usado
         const ratioPrompt = `Aspect ratio ${aspectRatio.replace(':', ' by ')} . `;
         const combinedPrompt = ratioPrompt + finalPrompt;
 
         const parts: any[] = [{ text: combinedPrompt }];
         
-        if (referenceImage) {
+        if (hasReference && activeMode === 'edit') {
           parts.unshift({
             inlineData: {
               data: referenceImage.base64,
@@ -295,13 +278,11 @@ const App: React.FC = () => {
         if (imgPart?.inlineData) {
           imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
         } else {
-           throw new Error("O modelo não retornou dados de imagem.");
+           throw new Error("O modelo não retornou imagem.");
         }
 
       } else {
-        // Modo High Quality (Imagen) - Garante o formato 9:16, 16:9, etc.
-        const statusMsg = forceHqForAspectRatio ? '📐 Ajustando Formato 9:16/16:9...' : '🎨 Renderizando Alta Fidelidade...';
-        setGenerationStatus(statusMsg);
+        setGenerationStatus('🖌️ Renderizando HQ...');
         usedModel = MODEL_IDS.HIGH_QUALITY;
         
         try {
@@ -310,7 +291,7 @@ const App: React.FC = () => {
               prompt: finalPrompt, 
               config: {
                 numberOfImages: 1,
-                aspectRatio: aspectRatio as any, // Passa o formato exato (ex: '9:16')
+                aspectRatio: aspectRatio as any,
                 outputMimeType: 'image/jpeg'
               }
            });
@@ -321,25 +302,18 @@ const App: React.FC = () => {
            } else {
              throw new Error("Sem resposta do modelo HQ.");
            }
-        } catch (imagenError: any) {
-           // Fallback automático para Flash
-           console.warn("Fallback executado:", imagenError);
-           setGenerationStatus('⚠️ Alternando para Turbo (Fallback)...');
+        } catch (imagenError) {
+           console.warn("Fallback executado");
+           setGenerationStatus('⚠️ Fallback Turbo...');
            usedModel = 'gemini-2.5-flash-image (fallback)';
-           
            const ratioPrompt = `Aspect ratio ${aspectRatio.replace(':', ' by ')} . `;
            const backupResponse = await ai.models.generateContent({
               model: 'gemini-2.5-flash-image',
               contents: { parts: [{ text: ratioPrompt + finalPrompt }] },
               config: { responseModalities: [Modality.IMAGE] }
            });
-           
            const imgPart = backupResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-           if (imgPart?.inlineData) {
-             imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
-           } else {
-             throw new Error("Falha na geração. Tente simplificar o prompt ou verificar sua chave API.");
-           }
+           if (imgPart?.inlineData) imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
         }
       }
 
@@ -353,346 +327,283 @@ const App: React.FC = () => {
           createdAt: Date.now(),
           referenceImage: referenceImage ? referenceImage.preview : undefined
         };
-        
         setGeneratedImages(prev => [newImage, ...prev]);
+        setSelectedImageId(newImage.id);
         saveImageToDB(newImage);
       }
       
     } catch (error: any) {
-      console.error("Erro de Geração:", error);
-      let msg = "Ocorreu um erro inesperado na comunicação com a API.";
-      
-      if (error.message) {
-          if (error.message.includes('SAFETY')) msg = "Conteúdo bloqueado pelos filtros de segurança. Tente um prompt diferente.";
-          else if (error.message.includes('429')) msg = "Muitas requisições. Aguarde alguns segundos.";
-          else if (error.message.includes('403') || error.message.includes('API key') || error.message.includes('401') || error.message.includes('fetch failed')) msg = "Erro de Chave API: A chave fornecida é inválida para este serviço.";
-      }
-      setErrorMsg(msg);
+      console.error(error);
+      setErrorMsg("Falha na geração. Verifique sua chave API ou simplifique o prompt.");
     } finally {
       setIsGenerating(false);
       setGenerationStatus('');
     }
   };
 
-  const getAspectRatioClass = (ratio: string) => {
-    switch(ratio) {
-      case '1:1': return 'aspect-square';
-      case '3:4': return 'aspect-[3/4]';
-      case '4:3': return 'aspect-[4/3]';
-      case '9:16': return 'aspect-[9/16]';
-      case '16:9': return 'aspect-[16/9]';
-      default: return 'aspect-square';
-    }
-  };
-
-  const handleDownload = (url: string, id: string) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `imaginario-${id}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
-  // Design System Colors - "Red & Black"
-  const design = {
-    bg: 'bg-black', 
-    card: 'bg-[#09090b]',
-    input: 'bg-[#09090b] text-white placeholder-zinc-600',
-    primaryGradient: 'bg-gradient-to-r from-red-600 to-rose-700',
-    glass: 'backdrop-blur-xl bg-black/60',
-  };
-
   const activeApiKey = userApiKey || process.env.API_KEY;
-  const isSquare = aspectRatio === AspectRatio.SQUARE;
+  const selectedImage = generatedImages.find(img => img.id === selectedImageId);
 
   return (
-    <div className={`min-h-screen w-full ${design.bg} text-zinc-200 font-sans selection:bg-red-500/30`}>
+    <div className="flex h-screen bg-black text-zinc-200 font-sans overflow-hidden selection:bg-red-500/30">
       
-      {/* Background Ambient Light */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full h-[600px] max-w-[1000px] bg-red-900/20 blur-[130px] rounded-full pointer-events-none z-0" />
-
-      {/* SETTINGS MODAL */}
+      {/* === SETTINGS MODAL === */}
       {showSettings && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-           <div className="w-full max-w-md bg-[#0c0c0e] border border-red-900/30 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden">
-              <div className="p-6 space-y-6 relative">
-                 {/* Header Modal */}
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+           <div className="w-full max-w-md bg-[#0c0c0e] border border-red-900/30 rounded-2xl shadow-2xl">
+              <div className="p-6 space-y-4">
                  <div className="flex justify-between items-center border-b border-white/5 pb-4">
-                    <div className="flex items-center gap-3">
-                       <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
-                          <Settings className="text-red-500" size={20} />
-                       </div>
-                       <div>
-                          <h3 className="font-bold text-white text-lg">Configuração do Sistema</h3>
-                          <p className="text-xs text-zinc-500 uppercase tracking-wider">Credenciais de Acesso</p>
-                       </div>
-                    </div>
-                    <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
-                       <X size={20} className="text-zinc-500" />
-                    </button>
+                    <h3 className="font-bold text-white">Configurações</h3>
+                    <button onClick={() => setShowSettings(false)}><X size={20} className="text-zinc-500 hover:text-white" /></button>
                  </div>
-
-                 {/* Body Modal */}
-                 <div className="space-y-4">
-                    <div className="space-y-2">
-                       <label className="text-xs font-bold text-zinc-400 ml-1 flex items-center gap-2">
-                          <Key size={12} />
-                          API KEY (Opcional)
-                       </label>
-                       <div className="relative group">
-                          <input 
-                             type="password"
-                             value={tempKey}
-                             onChange={(e) => setTempKey(e.target.value)}
-                             placeholder="Cole sua Google AI Studio Key aqui..."
-                             className="w-full bg-black border border-white/10 rounded-xl px-4 py-3.5 text-sm text-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none transition-all placeholder:text-zinc-700"
-                          />
-                          <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                             {tempKey ? <Check size={14} className="text-green-500" /> : <ShieldAlert size={14} className="text-zinc-700" />}
-                          </div>
-                       </div>
-                       <p className="text-[10px] text-zinc-600 leading-relaxed px-1">
-                          Se deixar em branco, o sistema usará a chave padrão (process.env). Use apenas se tiver uma chave Gemini pessoal específica.
-                       </p>
-                    </div>
+                 <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 flex items-center gap-2"><Key size={12} /> API KEY</label>
+                    <input 
+                       type="password" value={tempKey} onChange={(e) => setTempKey(e.target.value)}
+                       placeholder="Cole sua chave aqui..."
+                       className="w-full bg-black border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:border-red-500 outline-none"
+                    />
+                    <p className="text-[10px] text-zinc-600">Deixe vazio para usar a chave padrão do sistema.</p>
                  </div>
-
-                 {/* Footer Modal */}
-                 <div className="pt-2">
-                    <button 
-                      onClick={handleSaveSettings}
-                      className="w-full py-3.5 rounded-xl bg-zinc-100 text-black font-bold text-sm hover:bg-white hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg shadow-white/5"
-                    >
-                       SALVAR CONFIGURAÇÃO
-                    </button>
-                 </div>
+                 <button onClick={handleSaveSettings} className="w-full py-3 rounded-xl bg-white text-black font-bold text-sm hover:bg-zinc-200">SALVAR</button>
               </div>
            </div>
         </div>
       )}
 
-      {/* CONTAINER */}
-      <div className="max-w-[480px] mx-auto min-h-screen relative border-x border-white/5 bg-black shadow-[0_0_60px_rgba(0,0,0,0.9)] z-10">
+      {/* === LEFT PANEL (CONTROLS) === */}
+      <aside className="w-[400px] flex-shrink-0 border-r border-white/5 bg-[#050505] flex flex-col h-full relative z-10">
+        
+        {/* Header */}
+        <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/50 backdrop-blur-md">
+           <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-red-600 to-rose-900 flex items-center justify-center shadow-[0_0_15px_rgba(220,38,38,0.4)]">
+                 <Flame className="text-white w-4 h-4 fill-white" />
+              </div>
+              <div>
+                 <h1 className="font-bold text-sm tracking-wide text-white">IMAGINÁRIO</h1>
+                 <p className="text-[10px] text-red-500 font-medium tracking-widest uppercase">Studio Pro</p>
+              </div>
+           </div>
+           <button onClick={handleOpenSettings} className={`p-2 rounded-full hover:bg-white/5 transition-colors ${!activeApiKey ? 'text-red-500 animate-pulse' : 'text-zinc-600'}`}>
+             <Settings size={16} />
+           </button>
+        </div>
 
-        {/* HEADER */}
-        <header className={`flex items-center justify-between px-6 py-5 sticky top-0 z-50 ${design.glass} border-b border-white/5`}>
-          <div className="flex items-center gap-3">
-             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-600 to-rose-700 flex items-center justify-center shadow-[0_0_15px_rgba(220,38,38,0.3)]">
-                <Flame className="text-white w-5 h-5 fill-white" />
-             </div>
-             <div className="flex flex-col">
-                <span className="font-bold text-base tracking-wide text-white leading-none">IMAGINÁRIO</span>
-                <span className="text-[10px] font-medium text-red-500 tracking-widest uppercase mt-0.5">Red Edition</span>
-             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {activeApiKey ? (
-               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-900/20 border border-green-500/20">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></div>
-                  <span className="text-[9px] font-bold text-green-500 tracking-wider uppercase">Online</span>
-               </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-900/20 border border-red-500/20 animate-pulse">
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
-                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Offline</span>
-               </div>
-            )}
-            <button 
-              onClick={handleOpenSettings} 
-              className={`w-8 h-8 rounded-full bg-zinc-900 border flex items-center justify-center hover:bg-zinc-800 transition-all group ${!activeApiKey ? 'border-red-500 animate-bounce' : 'border-white/5'}`}
-            >
-               <Settings size={14} className={`text-zinc-500 group-hover:text-white transition-colors group-hover:rotate-90 duration-500 ${!activeApiKey ? 'text-red-500' : ''}`} />
-            </button>
-          </div>
-        </header>
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+           
+           {/* 1. Mode Toggle */}
+           <div className="p-1 bg-zinc-900/50 rounded-xl flex border border-white/5">
+              <button 
+                onClick={() => setActiveMode('create')}
+                className={`flex-1 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${activeMode === 'create' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                Criar
+              </button>
+              <button 
+                onClick={() => setActiveMode('edit')}
+                className={`flex-1 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${activeMode === 'edit' ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                Editar
+              </button>
+           </div>
 
-        {/* CORPO PRINCIPAL */}
-        <div className="px-5 pt-6 pb-40 space-y-7">
-          
-          {/* ÁREA DE INPUT */}
-          <div className="relative group">
-            <div className={`absolute -inset-0.5 bg-gradient-to-r from-red-600 to-rose-600 rounded-[26px] opacity-20 group-focus-within:opacity-60 blur transition duration-500`}></div>
-            <textarea 
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Descreva sua imagem complexa e detalhada aqui..."
-              className={`relative w-full h-40 rounded-[24px] p-6 text-[15px] leading-relaxed resize-none outline-none transition-all duration-300 ${design.input} focus:bg-[#0f0f10] shadow-inner`}
-            />
-            
-            {/* Botão de Upload de Referência */}
-            <div className="absolute bottom-4 left-4 z-10">
-               {referenceImage ? (
-                  <div className="flex items-center gap-2 bg-zinc-800 text-zinc-200 border border-white/10 px-3 py-1.5 rounded-full text-xs font-semibold animate-in zoom-in">
-                    <div className="w-4 h-4 overflow-hidden rounded-full">
-                       <img src={referenceImage.preview} className="w-full h-full object-cover" alt="ref" />
-                    </div>
-                    <span>Ref</span>
-                    <button onClick={(e) => { e.stopPropagation(); setReferenceImage(null); }} className="hover:text-red-400 ml-1"><X size={12}/></button>
-                  </div>
-               ) : (
-                  <label className={`p-2.5 rounded-full cursor-pointer hover:bg-zinc-800 transition-colors flex items-center justify-center bg-black/50 border border-white/5 hover:border-red-500/30 backdrop-blur-sm group/upload`}>
-                      <Upload size={16} className="text-zinc-500 group-hover/upload:text-red-400 transition-colors" />
-                      <input type="file" accept="image/*" className="hidden" onChange={handleReferenceImageUpload} />
-                  </label>
-               )}
-            </div>
-            
-            {/* Indicador de Caracteres */}
-            <div className="absolute bottom-5 right-6 text-[10px] font-bold text-zinc-600 z-10">
-               {prompt.length} CHARS
-            </div>
-          </div>
+           {/* 2. Prompt Section */}
+           <div className="space-y-3">
+              <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider ml-1">
+                 {activeMode === 'create' ? 'Descreva sua Ideia' : 'Instruções de Edição'}
+              </label>
+              <div className="relative group">
+                 <div className="absolute -inset-0.5 bg-gradient-to-r from-red-600/50 to-rose-600/50 rounded-2xl opacity-0 group-focus-within:opacity-100 blur transition duration-500"></div>
+                 <textarea 
+                   value={prompt}
+                   onChange={(e) => setPrompt(e.target.value)}
+                   placeholder={activeMode === 'create' ? "Ex: Um samurai cibernético em neon..." : "Ex: Mude o fundo para uma floresta vermelha..."}
+                   className="relative w-full h-32 bg-[#09090b] rounded-xl p-4 text-sm text-white placeholder-zinc-600 outline-none resize-none border border-white/10 focus:border-transparent transition-all"
+                 />
+              </div>
+           </div>
 
-          {/* TOGGLES DE MODO (TURBO & MAGIC) */}
-          <div className="grid grid-cols-2 gap-3">
-            <button 
-              onClick={() => setIsTurboMode(!isTurboMode)}
-              className={`py-4 rounded-2xl border text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 active:scale-95
-                ${isTurboMode 
-                  ? 'bg-orange-600/10 border-orange-600/50 text-orange-500 shadow-[0_0_15px_rgba(234,88,12,0.1)]' 
-                  : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'}`}
-            >
-              <Zap size={14} className={isTurboMode ? "fill-orange-500" : ""} />
-              {isTurboMode ? (isSquare ? "Modo Turbo" : "Turbo (Auto HQ)") : "Modo HQ"}
-            </button>
-            <button 
-              onClick={() => setIsMagicPrompt(!isMagicPrompt)}
-              className={`py-4 rounded-2xl border text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 active:scale-95
-                ${isMagicPrompt 
-                  ? 'bg-red-600/10 border-red-600/50 text-red-500 shadow-[0_0_15px_rgba(220,38,38,0.1)]' 
-                  : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'}`}
-            >
-              <Wand2 size={14} className={isMagicPrompt ? "fill-red-500" : ""} />
-              Magic V2
-            </button>
-          </div>
-
-          {/* SELETOR DE FORMATO */}
-          <div className="space-y-3">
-             <label className="text-[10px] font-bold uppercase tracking-widest ml-1 text-zinc-600 flex justify-between">
-                <span>Formato</span>
-                {!isSquare && !referenceImage && isTurboMode && (
-                   <span className="text-orange-500 flex items-center gap-1"><Activity size={10}/> Requer HQ</span>
-                )}
-             </label>
-             <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar mask-linear-fade">
-                {[AspectRatio.WIDE_PORTRAIT, AspectRatio.WIDE_LANDSCAPE, AspectRatio.SQUARE, AspectRatio.PORTRAIT, AspectRatio.LANDSCAPE].map((ratio) => (
-                  <button
-                    key={ratio}
-                    onClick={() => setAspectRatio(ratio)}
-                    className={`flex-shrink-0 px-4 py-3 rounded-xl text-[11px] font-bold border transition-all whitespace-nowrap active:scale-95 flex items-center gap-2
-                      ${aspectRatio === ratio 
-                        ? 'bg-zinc-100 text-black border-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' 
-                        : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'
-                      }`}
-                  >
-                    {ratio === AspectRatio.WIDE_PORTRAIT && <Smartphone size={12} />}
-                    {ratio === AspectRatio.WIDE_LANDSCAPE && <Monitor size={12} />}
-                    {ratio}
-                  </button>
-                ))}
-             </div>
-          </div>
-
-          {/* BOTÃO GERAR E ERROS */}
-          <div className="space-y-3 pt-2">
-               <button
-                  onClick={generateImage}
-                  disabled={isGenerating || !prompt.trim()}
-                  className={`w-full py-5 rounded-[24px] font-bold text-[15px] tracking-wide text-white shadow-2xl transform transition-all active:scale-[0.98] disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-3 ${design.primaryGradient} hover:shadow-red-500/25 overflow-hidden relative group`}
-                >
-                  {isGenerating ? (
-                    <>
-                      <RefreshCw className="animate-spin text-white/80" size={20} />
-                      <span className="text-white/90 animate-pulse">{generationStatus}</span>
-                    </>
-                  ) : (
-                    <>
-                      <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500 blur-2xl"></div>
-                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 duration-700 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white/10 to-transparent"></div>
-                      <Rocket size={20} className="group-hover:-translate-y-1 transition-transform duration-300 relative z-10" />
-                      <span className="relative z-10">GERAR ARTE AGORA</span>
-                    </>
-                  )}
-                </button>
-                
-                {errorMsg && (
-                  <div className="flex items-center gap-3 text-xs text-red-400 bg-red-950/30 p-4 rounded-xl border border-red-500/20 animate-in fade-in slide-in-from-top-2">
-                    <AlertTriangle size={16} className="flex-shrink-0" />
-                    <span className="font-medium">{errorMsg}</span>
-                  </div>
-                )}
-          </div>
-
-          {/* FEED DE IMAGENS */}
-          <div className="space-y-8 pt-4">
-              {generatedImages.length > 0 ? (
-                  <div className="flex flex-col gap-8 animate-in fade-in duration-700">
-                    {generatedImages.map((img) => (
-                        <div key={img.id} className="w-full flex flex-col gap-3 group/card">
-                            
-                            {/* Card da Imagem */}
-                            <div className={`w-full relative rounded-[32px] overflow-hidden border border-white/10 bg-[#09090b] shadow-2xl ${getAspectRatioClass(img.aspectRatio)}`}>
-                                <img 
-                                    src={img.url} 
-                                    alt="AI Art"
-                                    loading="lazy"
-                                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover/card:scale-105"
-                                />
-                                
-                                {/* Gradiente inferior */}
-                                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent opacity-80" />
-
-                                {/* Overlay de Ações */}
-                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/card:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-4 backdrop-blur-sm">
-                                    <button 
-                                        onClick={() => handleDownload(img.url, img.id)}
-                                        className="w-14 h-14 rounded-2xl bg-white text-black flex items-center justify-center hover:scale-110 hover:bg-red-50 hover:text-red-600 transition-all shadow-lg"
-                                    >
-                                        <Download size={24} strokeWidth={2} />
-                                    </button>
-                                    <button 
-                                        onClick={() => handleDeleteImage(img.id)}
-                                        className="w-14 h-14 rounded-2xl bg-zinc-900 text-red-500 border border-red-500/30 flex items-center justify-center hover:scale-110 hover:bg-red-950/50 transition-all shadow-lg"
-                                    >
-                                        <Trash2 size={24} strokeWidth={2} />
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            {/* Metadados */}
-                            <div className="px-2 flex justify-between items-center">
-                                <div className="flex flex-col gap-1 max-w-[70%]">
-                                  <p className="text-[13px] text-zinc-300 font-medium leading-snug line-clamp-1 group-hover/card:text-white transition-colors">
-                                      {img.prompt}
-                                  </p>
-                                  <span className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">
-                                    {new Date(img.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                  </span>
-                                </div>
-                                <span className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-md border border-white/5 tracking-wider flex items-center gap-1
-                                  ${img.model === MODEL_IDS.HIGH_QUALITY ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-orange-500/10 text-orange-400 border-orange-500/20'}
-                                `}>
-                                    {img.model === MODEL_IDS.HIGH_QUALITY ? <Activity size={10}/> : <Zap size={10} className="fill-orange-400"/>}
-                                    {img.model === MODEL_IDS.HIGH_QUALITY ? 'HQ' : 'TURBO'}
-                                </span>
-                            </div>
+           {/* 3. Functions / Styles Grid */}
+           {activeMode === 'create' && (
+             <div className="space-y-3">
+                <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider ml-1">Estilo</label>
+                <div className="grid grid-cols-2 gap-2">
+                   {(Object.keys(STYLES) as StyleKey[]).map((key) => (
+                     <button
+                       key={key}
+                       onClick={() => setSelectedStyle(key)}
+                       className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left group
+                         ${selectedStyle === key 
+                           ? 'bg-red-900/10 border-red-500/50 text-white' 
+                           : 'bg-[#09090b] border-white/5 text-zinc-500 hover:border-white/10 hover:bg-zinc-900'}`}
+                     >
+                        <div className={`p-2 rounded-lg ${selectedStyle === key ? 'bg-red-500 text-white' : 'bg-zinc-800 text-zinc-400 group-hover:text-zinc-200'}`}>
+                           {STYLES[key].icon}
                         </div>
-                    ))}
-                  </div>
-              ) : !isGenerating && (
-                <div className="py-20 flex flex-col items-center justify-center gap-4 opacity-30">
-                    <div className="w-20 h-20 rounded-full bg-zinc-900 flex items-center justify-center border border-white/5">
-                      <Sparkles className="text-zinc-500" size={32} />
-                    </div>
-                    <p className="text-sm font-medium tracking-wide text-zinc-500 uppercase">Pronto para criar</p>
+                        <span className="text-xs font-medium">{STYLES[key].label}</span>
+                     </button>
+                   ))}
                 </div>
-              )}
-          </div>
+             </div>
+           )}
+
+           {/* 4. Reference Image (Dual/Single Upload Logic) */}
+           {(activeMode === 'edit' || referenceImage) && (
+             <div className="space-y-3 animate-in fade-in slide-in-from-left-4">
+                <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider ml-1 flex justify-between">
+                   <span>Imagem de Referência</span>
+                   {activeMode === 'edit' && <span className="text-red-500 text-[9px]">Obrigatório</span>}
+                </label>
+                
+                {referenceImage ? (
+                   <div className="relative w-full h-40 bg-zinc-900 rounded-xl overflow-hidden border border-white/10 group">
+                      <img src={referenceImage.preview} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" alt="ref" />
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-sm">
+                         <button onClick={() => setReferenceImage(null)} className="p-2 bg-red-600 rounded-lg text-white hover:scale-110 transition-transform">
+                            <Trash2 size={16} />
+                         </button>
+                      </div>
+                      <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/60 rounded text-[10px] font-mono text-white backdrop-blur">
+                        REF
+                      </div>
+                   </div>
+                ) : (
+                   <label className="block w-full h-32 border-2 border-dashed border-white/10 rounded-xl hover:border-red-500/50 hover:bg-red-900/5 transition-all cursor-pointer flex flex-col items-center justify-center gap-2 group">
+                      <div className="p-3 bg-zinc-900 rounded-full group-hover:scale-110 transition-transform">
+                        <Upload size={20} className="text-zinc-500 group-hover:text-red-500" />
+                      </div>
+                      <span className="text-xs text-zinc-500 font-medium">Clique para enviar</span>
+                      <input type="file" accept="image/*" className="hidden" onChange={handleReferenceImageUpload} />
+                   </label>
+                )}
+             </div>
+           )}
+
+           {/* 5. Aspect Ratio & Turbo */}
+           <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider ml-1">Formato & Modelo</label>
+                <button 
+                  onClick={() => setIsTurboMode(!isTurboMode)}
+                  className={`text-[10px] font-bold px-2 py-1 rounded border flex items-center gap-1 transition-colors
+                    ${isTurboMode ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-zinc-800 text-zinc-500 border-white/5'}`}
+                >
+                   <Zap size={10} className={isTurboMode ? "fill-orange-400" : ""} />
+                   {isTurboMode ? 'TURBO ON' : 'TURBO OFF'}
+                </button>
+              </div>
+              
+              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                 {[AspectRatio.SQUARE, AspectRatio.PORTRAIT, AspectRatio.LANDSCAPE, AspectRatio.WIDE_PORTRAIT, AspectRatio.WIDE_LANDSCAPE].map(ratio => (
+                    <button 
+                      key={ratio}
+                      onClick={() => setAspectRatio(ratio)}
+                      className={`px-3 py-2 rounded-lg border text-[10px] font-bold flex-shrink-0 transition-all
+                        ${aspectRatio === ratio ? 'bg-white text-black border-white' : 'bg-zinc-900 text-zinc-500 border-white/5 hover:bg-zinc-800'}`}
+                    >
+                       {ratio}
+                    </button>
+                 ))}
+              </div>
+           </div>
 
         </div>
-      </div>
+
+        {/* Footer Action */}
+        <div className="p-6 border-t border-white/5 bg-[#050505]">
+           <button
+             onClick={generateImage}
+             disabled={isGenerating || !prompt.trim() || (activeMode === 'edit' && !referenceImage)}
+             className={`w-full py-4 rounded-xl font-bold text-sm tracking-wider text-white shadow-2xl transform transition-all active:scale-[0.98] disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2 bg-gradient-to-r from-red-600 to-rose-800 hover:shadow-red-500/20 relative overflow-hidden group`}
+           >
+              {isGenerating ? (
+                 <>
+                   <RefreshCw className="animate-spin" size={18} />
+                   <span className="animate-pulse">{generationStatus}</span>
+                 </>
+              ) : (
+                 <>
+                   <span className="relative z-10 flex items-center gap-2">
+                      <Rocket size={18} className="group-hover:-translate-y-0.5 transition-transform" />
+                      GERAR IMAGEM
+                   </span>
+                   <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500 blur-xl"></div>
+                 </>
+              )}
+           </button>
+           {errorMsg && <p className="text-red-500 text-[10px] mt-3 text-center bg-red-950/20 py-2 rounded border border-red-500/20">{errorMsg}</p>}
+        </div>
+      </aside>
+
+      {/* === RIGHT PANEL (PREVIEW & GALLERY) === */}
+      <main className="flex-1 flex flex-col bg-black relative">
+         {/* Background Ambient */}
+         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-red-900/10 via-black to-black pointer-events-none"></div>
+
+         {/* Main Preview Area */}
+         <div className="flex-1 flex items-center justify-center p-10 relative overflow-hidden">
+            {selectedImage ? (
+               <div className="relative max-w-full max-h-full flex flex-col items-center animate-in zoom-in-95 duration-500">
+                  <div className={`relative rounded-sm shadow-[0_0_100px_rgba(0,0,0,0.8)] border border-white/10 bg-zinc-900 overflow-hidden group`}>
+                     <img 
+                       src={selectedImage.url} 
+                       alt="Main Preview"
+                       className="max-h-[80vh] max-w-full object-contain"
+                     />
+                     <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-black to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex justify-center gap-4">
+                        <button 
+                          onClick={() => { 
+                             const link = document.createElement('a'); 
+                             link.href = selectedImage.url; 
+                             link.download = `imaginario-${selectedImage.id}.png`;
+                             link.click(); 
+                          }}
+                          className="px-6 py-3 bg-white text-black rounded-full font-bold text-xs hover:scale-105 transition-transform flex items-center gap-2"
+                        >
+                           <Download size={16} /> BAIXAR 4K
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteImage(selectedImage.id)}
+                          className="px-6 py-3 bg-red-600/20 backdrop-blur border border-red-500/30 text-red-500 rounded-full font-bold text-xs hover:bg-red-600 hover:text-white transition-all flex items-center gap-2"
+                        >
+                           <Trash2 size={16} /> DELETAR
+                        </button>
+                     </div>
+                  </div>
+                  <div className="mt-4 flex items-center gap-3 opacity-60 hover:opacity-100 transition-opacity">
+                     <span className="text-xs text-zinc-400 font-mono max-w-md truncate">{selectedImage.prompt}</span>
+                     <span className="text-[10px] px-2 py-0.5 border border-white/10 rounded text-zinc-500 uppercase">{selectedImage.model.includes('flash') ? 'Turbo' : 'HQ'}</span>
+                  </div>
+               </div>
+            ) : (
+               <div className="flex flex-col items-center justify-center gap-4 opacity-20">
+                  <div className="w-32 h-32 rounded-full border border-white/10 bg-zinc-900/50 flex items-center justify-center">
+                     <Sparkles size={48} className="text-zinc-500" />
+                  </div>
+                  <h2 className="text-2xl font-bold tracking-tight text-zinc-700 uppercase">Aguardando Criação</h2>
+               </div>
+            )}
+         </div>
+
+         {/* Bottom Gallery Strip */}
+         <div className="h-32 bg-[#050505] border-t border-white/5 p-4 flex items-center gap-4 overflow-x-auto custom-scrollbar z-20">
+            {generatedImages.map((img) => (
+               <button 
+                 key={img.id}
+                 onClick={() => setSelectedImageId(img.id)}
+                 className={`flex-shrink-0 h-24 aspect-square rounded-lg overflow-hidden border-2 transition-all relative group ${selectedImageId === img.id ? 'border-red-600 ring-4 ring-red-600/10 scale-105' : 'border-transparent hover:border-zinc-600 opacity-60 hover:opacity-100'}`}
+               >
+                  <img src={img.url} className="w-full h-full object-cover" alt="thumb" />
+                  {img.model.includes('imagen') && (
+                     <div className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full shadow-lg"></div>
+                  )}
+               </button>
+            ))}
+         </div>
+
+      </main>
     </div>
   );
 };
