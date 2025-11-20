@@ -136,6 +136,9 @@ const STORAGE_KEYS = {
   API_KEY: 'imaginario_custom_api_key'
 };
 
+// Chave padrão injetada conforme solicitação do usuário
+const PROVIDED_KEY = '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';
+
 // Modificadores extremos para complexidade visual e alta fidelidade
 const QUALITY_MODIFIERS = " . hyper-maximalist masterpiece, 8k UHD, intricate details, complex geometric patterns, volumetric cinematic lighting, unreal engine 5 render, sharp focus, rich textures, vivid deep colors, award winning photography, ray tracing, global illumination";
 
@@ -150,7 +153,11 @@ const App: React.FC = () => {
     localStorage.getItem(STORAGE_KEYS.MAGIC) === 'true'
   );
 
-  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.API_KEY) || '');
+  // Inicializa com a chave salva OU a chave fornecida (PROVIDED_KEY)
+  const [userApiKey, setUserApiKey] = useState(() => 
+    localStorage.getItem(STORAGE_KEYS.API_KEY) || PROVIDED_KEY
+  );
+  
   const [showSettings, setShowSettings] = useState(false);
   const [tempKey, setTempKey] = useState('');
 
@@ -449,7 +456,7 @@ const App: React.FC = () => {
                           </div>
                        </div>
                        <p className="text-[10px] text-zinc-600 leading-relaxed px-1">
-                          Cole sua chave iniciada em "sk-or-v1..." ou similar aqui. Ela será salva localmente no seu dispositivo.
+                          A chave fornecida já está carregada. Se desejar alterar, cole a nova chave aqui. Ela será salva localmente.
                        </p>
                     </div>
                  </div>
