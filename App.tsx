@@ -13,7 +13,8 @@ import {
   Download,
   RefreshCw,
   Rocket,
-  Image as ImageIcon
+  Image as ImageIcon,
+  AlertTriangle
 } from 'lucide-react';
 import { AspectRatio, GeneratedImage, ThemeMode, MODEL_IDS } from './types';
 
@@ -25,16 +26,14 @@ const DB_VERSION = 1;
 const initDB = (): Promise<IDBDatabase | null> => {
   return new Promise((resolve) => {
     if (!window.indexedDB) {
-      console.warn("IndexedDB não suportado, usando memória RAM.");
       resolve(null);
       return;
     }
     try {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       
-      // Tratamento silencioso de erros de acesso (comum em iframes/modo privado)
       request.onerror = (e) => {
-        console.warn("Acesso ao DB bloqueado (provavelmente restrição de segurança).", e);
+        console.warn("DB Access blocked", e);
         resolve(null); 
       };
 
@@ -47,7 +46,6 @@ const initDB = (): Promise<IDBDatabase | null> => {
         }
       };
     } catch (e) {
-      console.warn("Exceção crítica ao abrir DB:", e);
       resolve(null);
     }
   });
@@ -56,7 +54,7 @@ const initDB = (): Promise<IDBDatabase | null> => {
 const saveImageToDB = async (image: GeneratedImage) => {
   try {
     const db = await initDB();
-    if (!db) return null; // Falha silenciosa, apenas não salva no histórico persistente
+    if (!db) return null;
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
@@ -79,7 +77,6 @@ const getImagesFromDB = async (): Promise<GeneratedImage[]> => {
       const request = store.getAll();
       request.onsuccess = () => {
         const res = request.result as GeneratedImage[];
-        // Ordenar do mais recente para o mais antigo
         if (res && Array.isArray(res)) {
             res.sort((a,b) => b.createdAt - a.createdAt);
             resolve(res);
@@ -142,9 +139,6 @@ const STORAGE_KEYS = {
   MAGIC: '100k_pro_magic_v1'
 };
 
-// "CONSCIÊNCIA" DE QUALIDADE E PERSONAGENS:
-// Adicionamos 'official art' e 'canonical design' para garantir que personagens 
-// famosos sejam gerados exatamente como são, sem alucinações de cores ou roupas.
 const QUALITY_MODIFIERS = " . official art, canonical design, accurate character features, exact costume details, correct colors, symmetrical face, detailed eyes, 8k resolution, photorealistic, masterpiece, cinematic lighting, HDR, sharp focus, unreal engine 5 render";
 
 // --- Main Component ---
@@ -162,7 +156,7 @@ const App: React.FC = () => {
   );
 
   const [prompt, setPrompt] = useState('');
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.WIDE_PORTRAIT); // Default iPhone Fullscreen
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.WIDE_PORTRAIT);
   const [referenceImage, setReferenceImage] = useState<{ file: File, preview: string, base64: string } | null>(null);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -174,13 +168,12 @@ const App: React.FC = () => {
   useEffect(() => { localStorage.setItem(STORAGE_KEYS.MAGIC, String(isMagicPrompt)); }, [isMagicPrompt]);
 
   useEffect(() => {
-    // Carrega imagens, mas não falha se der erro
     getImagesFromDB().then(images => {
       if (images.length > 0) setGeneratedImages(images);
     });
   }, []);
 
-  // --- Styles (Mobile First / iPhone Aesthetic) ---
+  // --- Styles ---
   const getThemeClasses = () => {
     const isDark = themeMode === 'dark';
     return {
@@ -191,7 +184,6 @@ const App: React.FC = () => {
       border: isDark ? 'border-white/10' : 'border-black/5',
       input: isDark ? 'bg-slate-800/50 text-white' : 'bg-slate-100 text-slate-900',
       glass: isDark ? 'backdrop-blur-xl bg-slate-950/80' : 'backdrop-blur-xl bg-white/80',
-      buttonIcon: isDark ? 'text-slate-300' : 'text-slate-600'
     };
   };
   const theme = getThemeClasses();
@@ -216,63 +208,64 @@ const App: React.FC = () => {
       setGeneratedImages(prev => prev.filter(img => img.id !== id));
   };
 
-  // A "Consciência" (AI) para reescrever o prompt com foco em personagens
-  const enhancePromptAI = async (inputPrompt: string): Promise<string> => {
+  const enhancePromptAI = async (inputPrompt: string, apiKey: string): Promise<string> => {
     try {
-      // Assume que a API_KEY está disponível no ambiente
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: `You are an expert visual director. Transform this user request into a detailed image generation prompt in English. 
-        CRITICAL: If the user mentions a specific character (from anime, games, movies, or public figures), you MUST explicitly describe their official canonical appearance (hair color, eye shape, costume details, accessories) to ensure the image generator creates them perfectly without errors.
+        CRITICAL: If the user mentions a specific character (from anime, games, movies, or public figures), you MUST explicitly describe their official canonical appearance (hair color, eye shape, costume details, accessories) to ensure the image generator creates them perfectly.
         Keep the style: Realism, 8k, Cinematic.
         User Request: "${inputPrompt}"`,
       });
       return response.text || inputPrompt;
     } catch (e) {
-      // Se falhar a API de texto, retorna o prompt original para não travar
       return inputPrompt;
     }
   };
 
   const generateImage = async () => {
     if (!prompt.trim()) return;
-    
-    // Removed manual API Key check. Assuming process.env.API_KEY is valid.
+
+    // --- VERIFICAÇÃO CRÍTICA DE AMBIENTE ---
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      alert("Erro de Sistema: Chave de API não detectada no ambiente. Entre em contato com o administrador.");
+      return;
+    }
 
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       let finalPrompt = prompt;
 
-      // LÓGICA DE CONSCIÊNCIA E VELOCIDADE
+      // 1. Preparação do Prompt
       if (isTurboMode) {
-         setGenerationStatus('⚡ Gerando Ultra Rápido...');
-         // No modo Turbo, injetamos diretamente os modificadores sem passar pelo LLM de texto para ganhar 2-3 segundos
+         setGenerationStatus('⚡ Modo Rápido...');
          finalPrompt = prompt + QUALITY_MODIFIERS; 
       } else if (isMagicPrompt) {
-         setGenerationStatus('✨ Consultando Personagem...');
-         // No modo Magic, a IA reescreve o prompt para garantir a fidelidade do personagem
-         const enhanced = await enhancePromptAI(prompt);
+         setGenerationStatus('✨ Otimizando Personagem...');
+         const enhanced = await enhancePromptAI(prompt, apiKey);
          finalPrompt = enhanced + QUALITY_MODIFIERS;
       } else {
-         setGenerationStatus('🎨 Criando...');
+         setGenerationStatus('🎨 Preparando...');
          finalPrompt = prompt + QUALITY_MODIFIERS;
       }
 
       let imageUrl = '';
       let usedModel = '';
-
-      // Injeção de formato para garantir conformidade visual
+      
+      // Texto de ratio forçado para o modelo Gemini
       const ratioText = ` aspect ratio ${aspectRatio.replace(':', ' by ')}`;
 
+      // 2. Lógica de Seleção de Modelo
       if (isTurboMode || referenceImage) {
-        // MODO VELOCIDADE MAXIMA (Gemini Flash Image)
+        // === CAMINHO RÁPIDO (GEMINI FLASH) ===
+        setGenerationStatus('⚡ Gerando Imagem...');
         usedModel = MODEL_IDS.FAST_REFERENCE;
-        const promptWithRatio = finalPrompt + " . " + ratioText;
         
-        const parts: any[] = [{ text: promptWithRatio }];
+        const parts: any[] = [{ text: finalPrompt + " . " + ratioText }];
         if (referenceImage) {
           parts.unshift({
             inlineData: {
@@ -292,12 +285,14 @@ const App: React.FC = () => {
         if (imgPart?.inlineData) {
           imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
         } else {
-           throw new Error("O modelo rápido não retornou imagem. Tente novamente.");
+           throw new Error("A IA recusou gerar esta imagem. Tente um prompt diferente.");
         }
 
       } else {
-        // MODO QUALIDADE MAXIMA (Imagen 4)
+        // === CAMINHO ALTA QUALIDADE (IMAGEN 4) ===
+        setGenerationStatus('🎨 Renderizando em 4K...');
         usedModel = MODEL_IDS.HIGH_QUALITY;
+        
         try {
            const response = await ai.models.generateImages({
               model: 'imagen-4.0-generate-001',
@@ -308,28 +303,35 @@ const App: React.FC = () => {
                 outputMimeType: 'image/jpeg'
               }
            });
+           
            const b64 = response.generatedImages?.[0]?.image?.imageBytes;
            if (b64) {
              imageUrl = `data:image/jpeg;base64,${b64}`;
            } else {
-             throw new Error("O modelo de alta qualidade não retornou imagem.");
+             throw new Error("Sem resposta do Imagen.");
            }
-        } catch (err) {
-           console.warn("Fallback to Flash", err);
+        } catch (imagenError) {
+           // === FALLBACK AUTOMÁTICO PARA FLASH SE IMAGEN FALHAR ===
+           console.warn("Imagen 4 falhou ou está ocupado, tentando Flash...", imagenError);
+           setGenerationStatus('⚠️ Tentando modo alternativo...');
            usedModel = 'gemini-2.5-flash-image (backup)';
-           const promptWithRatio = finalPrompt + " . " + ratioText;
-           const response = await ai.models.generateContent({
+           
+           const backupResponse = await ai.models.generateContent({
               model: 'gemini-2.5-flash-image',
-              contents: { parts: [{ text: promptWithRatio }] },
+              contents: { parts: [{ text: finalPrompt + " . " + ratioText }] },
               config: { responseModalities: [Modality.IMAGE] }
            });
-           const imgPart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+           
+           const imgPart = backupResponse.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
            if (imgPart?.inlineData) {
              imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+           } else {
+             throw new Error("Falha em ambos os modelos. Tente simplificar o pedido.");
            }
         }
       }
 
+      // 3. Salvar e Exibir
       if (imageUrl) {
         const newImage: GeneratedImage = {
           id: Date.now().toString(),
@@ -340,15 +342,18 @@ const App: React.FC = () => {
           createdAt: Date.now(),
           referenceImage: referenceImage ? referenceImage.preview : undefined
         };
-        // Salvar no DB (se disponível) ou apenas no estado (se DB falhar)
-        await saveImageToDB(newImage);
+        
         setGeneratedImages(prev => [newImage, ...prev]);
+        saveImageToDB(newImage); // Fire and forget
       }
       
     } catch (error: any) {
-      console.error(error);
-      // Mensagem de erro amigável para o usuário
-      alert(`Não foi possível gerar a imagem. Detalhe: ${error.message || 'Erro desconhecido'}`);
+      console.error("Erro fatal na geração:", error);
+      let msg = "Erro desconhecido ao gerar.";
+      if (error.message) msg = error.message;
+      if (msg.includes("403") || msg.includes("API key")) msg = "Chave de API inválida ou expirada.";
+      
+      alert(`Ops! ${msg}`);
     } finally {
       setIsGenerating(false);
       setGenerationStatus('');
@@ -404,7 +409,7 @@ const App: React.FC = () => {
             <textarea 
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Digite o nome de um personagem ou descreva uma cena... (Ex: Goku Super Saiyajin)"
+              placeholder="Descreva sua imagem..."
               className={`w-full h-36 rounded-[2rem] p-5 text-base leading-relaxed resize-none outline-none shadow-inner transition-all ${theme.input} placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/50 border border-transparent focus:border-blue-500/20`}
             />
             
@@ -413,7 +418,7 @@ const App: React.FC = () => {
                {referenceImage ? (
                   <div className="flex items-center gap-2 bg-blue-500 text-white px-3 py-1.5 rounded-full text-xs font-bold shadow-lg animate-in zoom-in">
                     <ImageIcon size={12} />
-                    <span>Imagem Ref</span>
+                    <span>Ref Ativa</span>
                     <button onClick={(e) => { e.stopPropagation(); setReferenceImage(null); }} className="hover:text-red-200"><X size={12}/></button>
                   </div>
                ) : (
@@ -450,7 +455,7 @@ const App: React.FC = () => {
 
           {/* SELETOR DE FORMATO */}
           <div className="space-y-2">
-             <label className={`text-[10px] font-bold uppercase tracking-widest ml-1 ${theme.subText}`}>Formato da Tela</label>
+             <label className={`text-[10px] font-bold uppercase tracking-widest ml-1 ${theme.subText}`}>Formato</label>
              <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
                 {[AspectRatio.WIDE_PORTRAIT, AspectRatio.PORTRAIT, AspectRatio.SQUARE, AspectRatio.LANDSCAPE, AspectRatio.WIDE_LANDSCAPE].map((ratio) => (
                   <button
@@ -486,7 +491,7 @@ const App: React.FC = () => {
                   <>
                     <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 blur-xl rounded-[20px]"></div>
                     <Rocket size={20} className="group-hover:-translate-y-1 transition-transform duration-300" />
-                    <span>CRIAR ARTE</span>
+                    <span>GERAR IMAGEM</span>
                   </>
                 )}
               </button>
@@ -527,7 +532,7 @@ const App: React.FC = () => {
                                     {img.prompt}
                                 </p>
                                 <span className="text-[10px] font-bold uppercase bg-white/5 px-2 py-1 rounded text-slate-400">
-                                    {img.aspectRatio}
+                                    {img.model === MODEL_IDS.HIGH_QUALITY ? 'IMAGEN 4' : 'FLASH'}
                                 </span>
                             </div>
                         </div>
@@ -536,8 +541,9 @@ const App: React.FC = () => {
               )}
 
               {generatedImages.length === 0 && !isGenerating && (
-                <div className="py-10 text-center opacity-40">
-                    <p className="text-sm">Sua galeria aparecerá aqui.</p>
+                <div className="py-10 text-center opacity-40 flex flex-col items-center gap-3">
+                    <Sparkles className="text-slate-500" size={32} />
+                    <p className="text-sm">Pronto para criar.</p>
                 </div>
               )}
           </div>
