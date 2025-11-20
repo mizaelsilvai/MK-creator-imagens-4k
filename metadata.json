@@ -1,0 +1,5 @@
+{
+  "name": "Imaginário AI Studio",
+  "description": "Gerador de imagens de alta fidelidade utilizando Google Imagen 4 e Gemini Flash. Crie personagens, cenários e arte conceitual com rapidez e precisão.",
+  "requestFramePermissions": []
+}
