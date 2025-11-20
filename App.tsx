@@ -9,15 +9,11 @@ import {
   Moon,
   Sun,
   Sparkles,
-  Key,
   Trash2,
   Download,
-  Maximize2,
   RefreshCw,
   Rocket,
-  Image as ImageIcon,
-  Share2,
-  MoreHorizontal
+  Image as ImageIcon
 } from 'lucide-react';
 import { AspectRatio, GeneratedImage, ThemeMode, MODEL_IDS } from './types';
 
@@ -220,19 +216,10 @@ const App: React.FC = () => {
       setGeneratedImages(prev => prev.filter(img => img.id !== id));
   };
 
-  const handleApiKey = async () => {
-      if (window.aistudio && window.aistudio.openSelectKey) {
-          await window.aistudio.openSelectKey();
-      } else {
-          // Fallback suave se a API do Studio não estiver disponível
-          alert("Para usar a geração, verifique se sua chave API está configurada no ambiente.");
-      }
-  };
-
   // A "Consciência" (AI) para reescrever o prompt com foco em personagens
   const enhancePromptAI = async (inputPrompt: string): Promise<string> => {
-    if (!process.env.API_KEY) return inputPrompt;
     try {
+      // Assume que a API_KEY está disponível no ambiente
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -250,11 +237,8 @@ const App: React.FC = () => {
 
   const generateImage = async () => {
     if (!prompt.trim()) return;
-    if (!process.env.API_KEY) {
-      alert("Configure sua chave API clicando no ícone de chave.");
-      await handleApiKey();
-      return;
-    }
+    
+    // Removed manual API Key check. Assuming process.env.API_KEY is valid.
 
     setIsGenerating(true);
     
@@ -406,12 +390,8 @@ const App: React.FC = () => {
              <span className="font-bold text-lg tracking-tight">Imaginário</span>
           </div>
           <div className="flex gap-2">
-             {/* Removido botão GitHub para evitar erros de acesso */}
              <button onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')} className={`p-2 rounded-full transition-colors active:scale-90 ${theme.card} border ${theme.border}`}>
                {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-             </button>
-             <button onClick={handleApiKey} className={`p-2 rounded-full transition-colors active:scale-90 ${theme.card} border ${theme.border}`}>
-               <Key size={18} />
              </button>
           </div>
         </header>
