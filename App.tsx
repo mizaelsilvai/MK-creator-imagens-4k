@@ -190,11 +190,11 @@ const App: React.FC = () => {
   };
 
   const enhancePromptAI = async (inputPrompt: string): Promise<string> => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) return inputPrompt;
+    // Verifica silenciosamente a chave para o recurso extra
+    if (!process.env.API_KEY) return inputPrompt;
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: `You are an expert visual director. Improve this prompt for an image generator.
@@ -215,14 +215,13 @@ const App: React.FC = () => {
     if (!prompt.trim()) return;
     
     setIsGenerating(true);
-    setGenerationStatus('Iniciando...');
+    setGenerationStatus('Inicializando...');
     setErrorMsg(null);
     
-    // Obtém a chave silenciosamente do ambiente
-    const apiKey = process.env.API_KEY || '';
-    
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      // Inicialização direta - assumimos que o ambiente está configurado corretamente
+      // para que o usuário não precise lidar com chaves.
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       let finalPrompt = prompt;
 
       // 1. Otimização do Prompt
@@ -331,11 +330,12 @@ const App: React.FC = () => {
       console.error("Generation Error:", error);
       let msg = "Erro ao gerar imagem.";
       
+      // Mensagens de erro amigáveis, sem expor detalhes de API Key
       if (error.message) {
-          if (error.message.includes('API key')) msg = "Chave API não encontrada. Verifique suas configurações.";
-          else if (error.message.includes('SAFETY')) msg = "Conteúdo bloqueado por filtros de segurança.";
-          else if (error.message.includes('429')) msg = "Muitas requisições. Aguarde um momento.";
-          else msg = error.message;
+          if (error.message.includes('SAFETY')) msg = "Conteúdo restrito detectado pelos filtros de segurança.";
+          else if (error.message.includes('429')) msg = "Servidor sobrecarregado. Aguarde alguns segundos.";
+          else if (error.message.includes('API key') || error.message.includes('403')) msg = "Serviço de IA temporariamente indisponível.";
+          else msg = "Não foi possível criar a imagem. Tente mudar o prompt.";
       }
       
       setErrorMsg(msg);
