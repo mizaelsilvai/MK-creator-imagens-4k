@@ -136,9 +136,6 @@ const STORAGE_KEYS = {
   API_KEY: 'imaginario_custom_api_key'
 };
 
-// Chave padrão injetada conforme solicitação do usuário
-const PROVIDED_KEY = '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';
-
 // Modificadores extremos para complexidade visual e alta fidelidade
 const QUALITY_MODIFIERS = " . hyper-maximalist masterpiece, 8k UHD, intricate details, complex geometric patterns, volumetric cinematic lighting, unreal engine 5 render, sharp focus, rich textures, vivid deep colors, award winning photography, ray tracing, global illumination";
 
@@ -153,9 +150,9 @@ const App: React.FC = () => {
     localStorage.getItem(STORAGE_KEYS.MAGIC) === 'true'
   );
 
-  // Inicializa com a chave salva OU a chave fornecida (PROVIDED_KEY)
+  // Inicializa com a chave salva (se existir) ou vazio para usar a process.env.API_KEY
   const [userApiKey, setUserApiKey] = useState(() => 
-    localStorage.getItem(STORAGE_KEYS.API_KEY) || PROVIDED_KEY
+    localStorage.getItem(STORAGE_KEYS.API_KEY) || ''
   );
   
   const [showSettings, setShowSettings] = useState(false);
@@ -229,7 +226,7 @@ const App: React.FC = () => {
     const apiKey = userApiKey || process.env.API_KEY;
 
     if (!apiKey) {
-      setErrorMsg("Configuração Necessária: Chave API ausente. Clique na engrenagem para configurar.");
+      setErrorMsg("Configuração Necessária: Chave API ausente. O sistema não detectou uma chave válida.");
       setShowSettings(true);
       return;
     }
@@ -368,7 +365,7 @@ const App: React.FC = () => {
       if (error.message) {
           if (error.message.includes('SAFETY')) msg = "Conteúdo bloqueado pelos filtros de segurança. Tente um prompt diferente.";
           else if (error.message.includes('429')) msg = "Muitas requisições. Aguarde alguns segundos.";
-          else if (error.message.includes('403') || error.message.includes('API key') || error.message.includes('401') || error.message.includes('fetch failed')) msg = "Erro de Chave API: Verifique se sua chave está correta nas Configurações.";
+          else if (error.message.includes('403') || error.message.includes('API key') || error.message.includes('401') || error.message.includes('fetch failed')) msg = "Erro de Chave API: A chave fornecida é inválida para este serviço.";
       }
       setErrorMsg(msg);
     } finally {
@@ -441,14 +438,14 @@ const App: React.FC = () => {
                     <div className="space-y-2">
                        <label className="text-xs font-bold text-zinc-400 ml-1 flex items-center gap-2">
                           <Key size={12} />
-                          API KEY (Cole sua chave aqui)
+                          API KEY (Opcional)
                        </label>
                        <div className="relative group">
                           <input 
                              type="password"
                              value={tempKey}
                              onChange={(e) => setTempKey(e.target.value)}
-                             placeholder="sk-..."
+                             placeholder="Cole sua Google AI Studio Key aqui..."
                              className="w-full bg-black border border-white/10 rounded-xl px-4 py-3.5 text-sm text-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none transition-all placeholder:text-zinc-700"
                           />
                           <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -456,7 +453,7 @@ const App: React.FC = () => {
                           </div>
                        </div>
                        <p className="text-[10px] text-zinc-600 leading-relaxed px-1">
-                          A chave fornecida já está carregada. Se desejar alterar, cole a nova chave aqui. Ela será salva localmente.
+                          Se deixar em branco, o sistema usará a chave padrão (process.env). Use apenas se tiver uma chave Gemini pessoal específica.
                        </p>
                     </div>
                  </div>
@@ -467,7 +464,7 @@ const App: React.FC = () => {
                       onClick={handleSaveSettings}
                       className="w-full py-3.5 rounded-xl bg-zinc-100 text-black font-bold text-sm hover:bg-white hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg shadow-white/5"
                     >
-                       SALVAR E CONTINUAR
+                       SALVAR CONFIGURAÇÃO
                     </button>
                  </div>
               </div>
@@ -493,12 +490,12 @@ const App: React.FC = () => {
             {activeApiKey ? (
                <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-900/20 border border-green-500/20">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></div>
-                  <span className="text-[9px] font-bold text-green-500 tracking-wider uppercase">Pronto</span>
+                  <span className="text-[9px] font-bold text-green-500 tracking-wider uppercase">Online</span>
                </div>
             ) : (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-900/20 border border-red-500/20 animate-pulse">
                   <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
-                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Sem Chave</span>
+                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Offline</span>
                </div>
             )}
             <button 
