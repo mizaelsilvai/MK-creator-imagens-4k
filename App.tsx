@@ -13,11 +13,12 @@ import {
   Rocket,
   Image as ImageIcon,
   AlertTriangle,
-  Aperture
+  Flame,
+  Activity
 } from 'lucide-react';
 import { AspectRatio, GeneratedImage, MODEL_IDS } from './types';
 
-// --- IndexedDB Helpers (Banco de Dados Blindado) ---
+// --- IndexedDB Helpers (Banco de Dados Local) ---
 const DB_NAME = 'ImaginarioStudioDB';
 const STORE_NAME = 'images';
 const DB_VERSION = 1;
@@ -31,11 +32,7 @@ const initDB = (): Promise<IDBDatabase | null> => {
     try {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       
-      request.onerror = (e) => {
-        console.warn("DB Access blocked", e);
-        resolve(null); 
-      };
-
+      request.onerror = () => resolve(null);
       request.onsuccess = () => resolve(request.result);
       
       request.onupgradeneeded = (event) => {
@@ -54,12 +51,12 @@ const saveImageToDB = async (image: GeneratedImage) => {
   try {
     const db = await initDB();
     if (!db) return null;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const transaction = db.transaction([STORE_NAME], 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
-      const request = store.put(image);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      store.put(image);
+      transaction.oncomplete = () => resolve(true);
+      transaction.onerror = () => resolve(false);
     });
   } catch (e) {
     return null;
@@ -70,7 +67,7 @@ const getImagesFromDB = async (): Promise<GeneratedImage[]> => {
   try {
     const db = await initDB();
     if (!db) return [];
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const transaction = db.transaction([STORE_NAME], 'readonly');
       const store = transaction.objectStore(STORE_NAME);
       const request = store.getAll();
@@ -83,7 +80,7 @@ const getImagesFromDB = async (): Promise<GeneratedImage[]> => {
             resolve([]);
         }
       };
-      request.onerror = () => reject(request.error);
+      request.onerror = () => resolve([]);
     });
   } catch (e) {
     return [];
@@ -94,20 +91,15 @@ const deleteFromDB = async (id: string) => {
    try {
     const db = await initDB();
     if (!db) return;
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.delete(id);
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
-    });
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    store.delete(id);
   } catch (e) {
     console.error("Failed to delete item", e);
   }
 }
 
 // --- File Helpers ---
-
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -133,20 +125,19 @@ const fileToDataUrl = (file: File): Promise<string> => {
 
 // --- Constants ---
 const STORAGE_KEYS = {
-  TURBO: '100k_pro_turbo_v1',
-  MAGIC: '100k_pro_magic_v1'
+  TURBO: 'imaginario_turbo_mode',
+  MAGIC: 'imaginario_magic_prompt'
 };
 
-const QUALITY_MODIFIERS = " . highly detailed, 8k, official art, canonical design, masterpiece, photorealistic, cinematic lighting, sharp focus, vivid colors";
-
-// --- Main Component ---
+const QUALITY_MODIFIERS = " . best quality, 8k, highly detailed, masterpiece, vivid colors, cinematic lighting, sharp focus, dramatic atmosphere";
 
 const App: React.FC = () => {
   // --- State ---
-  // Theme mode removed: Always Dark/Black
-  const [isTurboMode, setIsTurboMode] = useState(() => 
-    localStorage.getItem(STORAGE_KEYS.TURBO) === 'true'
-  );
+  // Default to Turbo (Fast) mode for better user experience unless changed
+  const [isTurboMode, setIsTurboMode] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.TURBO);
+    return stored !== null ? stored === 'true' : true; 
+  });
   const [isMagicPrompt, setIsMagicPrompt] = useState(() => 
     localStorage.getItem(STORAGE_KEYS.MAGIC) === 'true'
   );
@@ -189,58 +180,54 @@ const App: React.FC = () => {
       setGeneratedImages(prev => prev.filter(img => img.id !== id));
   };
 
-  const enhancePromptAI = async (inputPrompt: string): Promise<string> => {
-    // Verifica silenciosamente a chave para o recurso extra
-    if (!process.env.API_KEY) return inputPrompt;
-
+  const enhancePromptAI = async (inputPrompt: string, ai: GoogleGenAI): Promise<string> => {
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are an expert visual director. Improve this prompt for an image generator.
-        User Request: "${inputPrompt}"
-        Rules:
-        1. If it contains a character name, describe their canonical appearance (hair, eyes, outfit) in detail.
-        2. Keep it concise but descriptive.
-        3. Style: High quality, 8k, Cinematic.
-        4. Return ONLY the prompt text.`,
+        contents: `Improve this image prompt to be more descriptive and artistic. Keep it under 50 words. Input: "${inputPrompt}"`,
       });
       return response.text || inputPrompt;
     } catch (e) {
-      return inputPrompt;
+      return inputPrompt; // Fail gracefully
     }
   };
 
   const generateImage = async () => {
     if (!prompt.trim()) return;
     
+    // Check API Key availability safely
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      setErrorMsg("Erro de Configuração: Chave de API não encontrada no ambiente.");
+      return;
+    }
+
     setIsGenerating(true);
     setGenerationStatus('Inicializando...');
     setErrorMsg(null);
     
     try {
-      // Inicialização direta - assumimos que o ambiente está configurado corretamente
-      // para que o usuário não precise lidar com chaves.
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       let finalPrompt = prompt;
 
-      // 1. Otimização do Prompt
-      if (!isTurboMode && isMagicPrompt) {
-         setGenerationStatus('✨ Otimizando Prompt...');
-         finalPrompt = await enhancePromptAI(prompt);
+      // 1. Magic Prompt (Opcional)
+      if (isMagicPrompt && !referenceImage) {
+         setGenerationStatus('✨ Melhorando Prompt...');
+         finalPrompt = await enhancePromptAI(prompt, ai);
       }
       
-      // Adiciona modificadores globais
+      // Adiciona sufixos de qualidade
       finalPrompt += QUALITY_MODIFIERS;
+      const ratioText = ` . aspect ratio ${aspectRatio.replace(':', ' by ')}`;
 
       let imageUrl = '';
       let usedModel = '';
-      
-      const ratioText = ` . aspect ratio ${aspectRatio.replace(':', ' by ')}`;
 
-      // 2. Lógica de Geração
-      if (isTurboMode || referenceImage) {
-        // === MODO RÁPIDO / COM REFERÊNCIA ===
+      // Decisão de Modelo
+      // Se tiver imagem de referência OU estiver em modo Turbo -> Usa Flash Image
+      const useFlash = isTurboMode || !!referenceImage;
+
+      if (useFlash) {
         setGenerationStatus('⚡ Gerando (Flash)...');
         usedModel = MODEL_IDS.FAST_REFERENCE;
         
@@ -265,11 +252,11 @@ const App: React.FC = () => {
         if (imgPart?.inlineData) {
           imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
         } else {
-           throw new Error("Não foi possível gerar a imagem com o modelo Rápido.");
+           throw new Error("O modelo não retornou dados de imagem.");
         }
 
       } else {
-        // === MODO ALTA QUALIDADE (IMAGEN 4) ===
+        // Modo High Quality (Imagen)
         setGenerationStatus('🎨 Renderizando (Imagen 4)...');
         usedModel = MODEL_IDS.HIGH_QUALITY;
         
@@ -288,12 +275,13 @@ const App: React.FC = () => {
            if (b64) {
              imageUrl = `data:image/jpeg;base64,${b64}`;
            } else {
-             throw new Error("No image data returned from Imagen.");
+             throw new Error("Imagen 4 sem resposta.");
            }
         } catch (imagenError: any) {
-           console.warn("Fallback to Flash caused by:", imagenError);
-           setGenerationStatus('⚠️ Alternando para backup...');
-           usedModel = 'gemini-2.5-flash-image (backup)';
+           // Fallback automático para Flash se Imagen falhar (cotas/permissão)
+           console.warn("Imagen fallback:", imagenError);
+           setGenerationStatus('⚠️ Alternando para Turbo...');
+           usedModel = 'gemini-2.5-flash-image (fallback)';
            
            const backupResponse = await ai.models.generateContent({
               model: 'gemini-2.5-flash-image',
@@ -305,12 +293,11 @@ const App: React.FC = () => {
            if (imgPart?.inlineData) {
              imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
            } else {
-             throw new Error("Falha na geração. Tente simplificar seu pedido.");
+             throw new Error("Falha na geração. Tente um prompt mais simples.");
            }
         }
       }
 
-      // 3. Sucesso - Salvar
       if (imageUrl) {
         const newImage: GeneratedImage = {
           id: Date.now().toString(),
@@ -328,16 +315,14 @@ const App: React.FC = () => {
       
     } catch (error: any) {
       console.error("Generation Error:", error);
-      let msg = "Erro ao gerar imagem.";
+      let msg = "Ocorreu um erro inesperado.";
       
-      // Mensagens de erro amigáveis, sem expor detalhes de API Key
       if (error.message) {
-          if (error.message.includes('SAFETY')) msg = "Conteúdo restrito detectado pelos filtros de segurança.";
-          else if (error.message.includes('429')) msg = "Servidor sobrecarregado. Aguarde alguns segundos.";
-          else if (error.message.includes('API key') || error.message.includes('403')) msg = "Serviço de IA temporariamente indisponível.";
-          else msg = "Não foi possível criar a imagem. Tente mudar o prompt.";
+          if (error.message.includes('SAFETY')) msg = "Conteúdo bloqueado pelos filtros de segurança.";
+          else if (error.message.includes('429')) msg = "Muitas requisições. Aguarde um momento.";
+          else if (error.message.includes('API key') || error.message.includes('403')) msg = "Chave de API inválida ou sem permissão.";
+          else msg = "Falha ao criar imagem. Tente novamente.";
       }
-      
       setErrorMsg(msg);
     } finally {
       setIsGenerating(false);
@@ -365,42 +350,47 @@ const App: React.FC = () => {
     document.body.removeChild(a);
   };
 
-  // Design System Colors - "Modern Black"
+  // Design System Colors - "Red & Black"
   const design = {
-    bg: 'bg-black', // Pure black
-    card: 'bg-[#09090b]', // Zinc 950
-    cardHover: 'hover:bg-[#18181b]', // Zinc 900
-    border: 'border-white/10',
-    activeBorder: 'border-white/20',
-    input: 'bg-[#09090b] text-white placeholder-zinc-500',
-    accent: 'text-purple-400',
-    primaryGradient: 'bg-gradient-to-r from-violet-600 to-indigo-600',
+    bg: 'bg-black', 
+    card: 'bg-[#09090b]',
+    input: 'bg-[#09090b] text-white placeholder-zinc-600',
+    primaryGradient: 'bg-gradient-to-r from-red-600 to-rose-700',
     glass: 'backdrop-blur-xl bg-black/60',
   };
 
   return (
-    <div className={`min-h-screen w-full ${design.bg} text-zinc-200 font-sans selection:bg-purple-500/30`}>
+    <div className={`min-h-screen w-full ${design.bg} text-zinc-200 font-sans selection:bg-red-500/30`}>
       
-      {/* Background Ambient Light (Subtle) */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full h-[500px] max-w-[800px] bg-violet-900/20 blur-[120px] rounded-full pointer-events-none z-0" />
+      {/* Background Ambient Light */}
+      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full h-[600px] max-w-[1000px] bg-red-900/20 blur-[130px] rounded-full pointer-events-none z-0" />
 
-      {/* CONTAINER MOBILE */}
-      <div className="max-w-[480px] mx-auto min-h-screen relative border-x border-white/5 bg-black shadow-[0_0_50px_rgba(0,0,0,0.8)] z-10">
+      {/* CONTAINER */}
+      <div className="max-w-[480px] mx-auto min-h-screen relative border-x border-white/5 bg-black shadow-[0_0_60px_rgba(0,0,0,0.9)] z-10">
 
         {/* HEADER */}
-        <header className={`flex items-center justify-between px-6 py-5 sticky top-0 z-50 ${design.glass} border-b ${design.border}`}>
+        <header className={`flex items-center justify-between px-6 py-5 sticky top-0 z-50 ${design.glass} border-b border-white/5`}>
           <div className="flex items-center gap-3">
-             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shadow-[0_0_15px_rgba(139,92,246,0.3)]">
-                <Aperture className="text-white w-5 h-5" />
+             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-600 to-rose-700 flex items-center justify-center shadow-[0_0_15px_rgba(220,38,38,0.3)]">
+                <Flame className="text-white w-5 h-5 fill-white" />
              </div>
              <div className="flex flex-col">
                 <span className="font-bold text-base tracking-wide text-white leading-none">IMAGINÁRIO</span>
-                <span className="text-[10px] font-medium text-zinc-500 tracking-widest uppercase mt-0.5">AI Studio</span>
+                <span className="text-[10px] font-medium text-red-500 tracking-widest uppercase mt-0.5">Red Edition</span>
              </div>
           </div>
-          <div className="flex gap-2">
-            {/* Indicator dot just for aesthetics */}
-             <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] animate-pulse"></div>
+          <div className="flex items-center gap-2">
+            {process.env.API_KEY ? (
+               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-900/20 border border-green-500/20">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></div>
+                  <span className="text-[9px] font-bold text-green-500 tracking-wider uppercase">Online</span>
+               </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-900/20 border border-red-500/20">
+                  <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
+                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Offline</span>
+               </div>
+            )}
           </div>
         </header>
 
@@ -409,12 +399,12 @@ const App: React.FC = () => {
           
           {/* ÁREA DE INPUT */}
           <div className="relative group">
-            <div className={`absolute -inset-0.5 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-[26px] opacity-20 group-focus-within:opacity-60 blur transition duration-500`}></div>
+            <div className={`absolute -inset-0.5 bg-gradient-to-r from-red-600 to-rose-600 rounded-[26px] opacity-20 group-focus-within:opacity-60 blur transition duration-500`}></div>
             <textarea 
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Imagine algo incrível..."
-              className={`relative w-full h-40 rounded-[24px] p-6 text-[15px] leading-relaxed resize-none outline-none transition-all duration-300 ${design.input} focus:bg-[#0e0e11] shadow-inner`}
+              placeholder="O que sua imaginação deseja criar hoje?"
+              className={`relative w-full h-40 rounded-[24px] p-6 text-[15px] leading-relaxed resize-none outline-none transition-all duration-300 ${design.input} focus:bg-[#0f0f10] shadow-inner`}
             />
             
             {/* Botão de Upload de Referência */}
@@ -425,11 +415,11 @@ const App: React.FC = () => {
                        <img src={referenceImage.preview} className="w-full h-full object-cover" alt="ref" />
                     </div>
                     <span>Ref</span>
-                    <button onClick={(e) => { e.stopPropagation(); setReferenceImage(null); }} className="hover:text-white ml-1"><X size={12}/></button>
+                    <button onClick={(e) => { e.stopPropagation(); setReferenceImage(null); }} className="hover:text-red-400 ml-1"><X size={12}/></button>
                   </div>
                ) : (
-                  <label className={`p-2.5 rounded-full cursor-pointer hover:bg-zinc-800 transition-colors flex items-center justify-center bg-black/50 border border-white/5 hover:border-white/20 backdrop-blur-sm group/upload`}>
-                      <Upload size={16} className="text-zinc-400 group-hover/upload:text-white transition-colors" />
+                  <label className={`p-2.5 rounded-full cursor-pointer hover:bg-zinc-800 transition-colors flex items-center justify-center bg-black/50 border border-white/5 hover:border-red-500/30 backdrop-blur-sm group/upload`}>
+                      <Upload size={16} className="text-zinc-500 group-hover/upload:text-red-400 transition-colors" />
                       <input type="file" accept="image/*" className="hidden" onChange={handleReferenceImageUpload} />
                   </label>
                )}
@@ -447,27 +437,27 @@ const App: React.FC = () => {
               onClick={() => setIsTurboMode(!isTurboMode)}
               className={`py-4 rounded-2xl border text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 active:scale-95
                 ${isTurboMode 
-                  ? 'bg-yellow-500/10 border-yellow-500/50 text-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.1)]' 
+                  ? 'bg-orange-600/10 border-orange-600/50 text-orange-500 shadow-[0_0_15px_rgba(234,88,12,0.1)]' 
                   : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'}`}
             >
-              <Zap size={14} className={isTurboMode ? "fill-yellow-400" : ""} />
-              Turbo
+              <Zap size={14} className={isTurboMode ? "fill-orange-500" : ""} />
+              {isTurboMode ? "Turbo ON" : "HQ Mode"}
             </button>
             <button 
               onClick={() => setIsMagicPrompt(!isMagicPrompt)}
               className={`py-4 rounded-2xl border text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all duration-300 active:scale-95
                 ${isMagicPrompt 
-                  ? 'bg-purple-500/10 border-purple-500/50 text-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.1)]' 
+                  ? 'bg-red-600/10 border-red-600/50 text-red-500 shadow-[0_0_15px_rgba(220,38,38,0.1)]' 
                   : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'}`}
             >
-              <Wand2 size={14} className={isMagicPrompt ? "fill-purple-400" : ""} />
+              <Wand2 size={14} className={isMagicPrompt ? "fill-red-500" : ""} />
               Magic AI
             </button>
           </div>
 
           {/* SELETOR DE FORMATO */}
           <div className="space-y-3">
-             <label className="text-[10px] font-bold uppercase tracking-widest ml-1 text-zinc-500">Aspect Ratio</label>
+             <label className="text-[10px] font-bold uppercase tracking-widest ml-1 text-zinc-600">Formato</label>
              <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar mask-linear-fade">
                 {[AspectRatio.WIDE_PORTRAIT, AspectRatio.PORTRAIT, AspectRatio.SQUARE, AspectRatio.LANDSCAPE, AspectRatio.WIDE_LANDSCAPE].map((ratio) => (
                   <button
@@ -490,7 +480,7 @@ const App: React.FC = () => {
                <button
                   onClick={generateImage}
                   disabled={isGenerating || !prompt.trim()}
-                  className={`w-full py-5 rounded-[24px] font-bold text-[15px] tracking-wide text-white shadow-2xl transform transition-all active:scale-[0.98] disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-3 ${design.primaryGradient} hover:shadow-violet-500/25 overflow-hidden relative group`}
+                  className={`w-full py-5 rounded-[24px] font-bold text-[15px] tracking-wide text-white shadow-2xl transform transition-all active:scale-[0.98] disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-3 ${design.primaryGradient} hover:shadow-red-500/25 overflow-hidden relative group`}
                 >
                   {isGenerating ? (
                     <>
@@ -508,7 +498,7 @@ const App: React.FC = () => {
                 </button>
                 
                 {errorMsg && (
-                  <div className="flex items-center gap-3 text-xs text-red-400 bg-red-950/20 p-4 rounded-xl border border-red-500/20 animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center gap-3 text-xs text-red-400 bg-red-950/30 p-4 rounded-xl border border-red-500/20 animate-in fade-in slide-in-from-top-2">
                     <AlertTriangle size={16} className="flex-shrink-0" />
                     <span className="font-medium">{errorMsg}</span>
                   </div>
@@ -531,14 +521,14 @@ const App: React.FC = () => {
                                     className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover/card:scale-105"
                                 />
                                 
-                                {/* Gradiente inferior para leitura de texto se necessário, ou apenas estético */}
-                                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/60 to-transparent opacity-60" />
+                                {/* Gradiente inferior */}
+                                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent opacity-80" />
 
                                 {/* Overlay de Ações */}
                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/card:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-4 backdrop-blur-sm">
                                     <button 
                                         onClick={() => handleDownload(img.url, img.id)}
-                                        className="w-14 h-14 rounded-2xl bg-white text-black flex items-center justify-center hover:scale-110 hover:bg-violet-100 transition-all shadow-lg"
+                                        className="w-14 h-14 rounded-2xl bg-white text-black flex items-center justify-center hover:scale-110 hover:bg-red-50 hover:text-red-600 transition-all shadow-lg"
                                     >
                                         <Download size={24} strokeWidth={2} />
                                     </button>
@@ -561,10 +551,11 @@ const App: React.FC = () => {
                                     {new Date(img.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                   </span>
                                 </div>
-                                <span className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-md border border-white/5 tracking-wider
-                                  ${img.model === MODEL_IDS.HIGH_QUALITY ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}
+                                <span className={`text-[9px] font-bold uppercase px-2.5 py-1 rounded-md border border-white/5 tracking-wider flex items-center gap-1
+                                  ${img.model === MODEL_IDS.HIGH_QUALITY ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-orange-500/10 text-orange-400 border-orange-500/20'}
                                 `}>
-                                    {img.model === MODEL_IDS.HIGH_QUALITY ? 'HQ IMAGEN' : 'FLASH'}
+                                    {img.model === MODEL_IDS.HIGH_QUALITY ? <Activity size={10}/> : <Zap size={10} className="fill-orange-400"/>}
+                                    {img.model === MODEL_IDS.HIGH_QUALITY ? 'HQ' : 'FAST'}
                                 </span>
                             </div>
                         </div>
@@ -575,7 +566,7 @@ const App: React.FC = () => {
                     <div className="w-20 h-20 rounded-full bg-zinc-900 flex items-center justify-center border border-white/5">
                       <Sparkles className="text-zinc-500" size={32} />
                     </div>
-                    <p className="text-sm font-medium tracking-wide text-zinc-500 uppercase">Aguardando comando</p>
+                    <p className="text-sm font-medium tracking-wide text-zinc-500 uppercase">Pronto para criar</p>
                 </div>
               )}
           </div>
