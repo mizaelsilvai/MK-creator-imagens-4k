@@ -14,7 +14,11 @@ import {
   Image as ImageIcon,
   AlertTriangle,
   Flame,
-  Activity
+  Activity,
+  Settings,
+  Key,
+  Check,
+  ShieldAlert
 } from 'lucide-react';
 import { AspectRatio, GeneratedImage, MODEL_IDS } from './types';
 
@@ -126,10 +130,12 @@ const fileToDataUrl = (file: File): Promise<string> => {
 // --- Constants ---
 const STORAGE_KEYS = {
   TURBO: 'imaginario_turbo_mode',
-  MAGIC: 'imaginario_magic_prompt'
+  MAGIC: 'imaginario_magic_prompt',
+  API_KEY: 'imaginario_custom_api_key'
 };
 
-const QUALITY_MODIFIERS = " . best quality, 8k, highly detailed, masterpiece, vivid colors, cinematic lighting, sharp focus, dramatic atmosphere";
+// Modificadores extremos para complexidade visual e alta fidelidade
+const QUALITY_MODIFIERS = " . hyper-realistic masterpiece, 8k UHD, intricate maximalist details, complex geometric patterns, volumetric cinematic lighting, unreal engine 5 render, sharp focus, rich textures, vivid deep colors, award winning photography, octane render, ray tracing";
 
 const App: React.FC = () => {
   // --- State ---
@@ -141,6 +147,10 @@ const App: React.FC = () => {
   const [isMagicPrompt, setIsMagicPrompt] = useState(() => 
     localStorage.getItem(STORAGE_KEYS.MAGIC) === 'true'
   );
+
+  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem(STORAGE_KEYS.API_KEY) || '');
+  const [showSettings, setShowSettings] = useState(false);
+  const [tempKey, setTempKey] = useState('');
 
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.WIDE_PORTRAIT);
@@ -161,6 +171,16 @@ const App: React.FC = () => {
   }, []);
 
   // --- Handlers ---
+  const handleOpenSettings = () => {
+    setTempKey(userApiKey);
+    setShowSettings(true);
+  };
+
+  const handleSaveSettings = () => {
+    localStorage.setItem(STORAGE_KEYS.API_KEY, tempKey.trim());
+    setUserApiKey(tempKey.trim());
+    setShowSettings(false);
+  };
 
   const handleReferenceImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -182,9 +202,10 @@ const App: React.FC = () => {
 
   const enhancePromptAI = async (inputPrompt: string, ai: GoogleGenAI): Promise<string> => {
     try {
+      // Solicita uma descrição mais complexa e artística
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `Improve this image prompt to be more descriptive and artistic. Keep it under 50 words. Input: "${inputPrompt}"`,
+        contents: `Rewrite this image prompt to be extremely descriptive, focusing on complex details, lighting, and artistic composition. Make it sophisticated. Input: "${inputPrompt}"`,
       });
       return response.text || inputPrompt;
     } catch (e) {
@@ -195,10 +216,12 @@ const App: React.FC = () => {
   const generateImage = async () => {
     if (!prompt.trim()) return;
     
-    // Check API Key availability safely
-    const apiKey = process.env.API_KEY;
+    // Prioriza a chave do usuário, depois tenta a do ambiente
+    const apiKey = userApiKey || process.env.API_KEY;
+
     if (!apiKey) {
-      setErrorMsg("Erro de Configuração: Chave de API não encontrada no ambiente.");
+      setErrorMsg("Configuração Necessária: Chave API ausente. Clique na engrenagem para configurar.");
+      setShowSettings(true);
       return;
     }
 
@@ -208,30 +231,42 @@ const App: React.FC = () => {
     
     try {
       const ai = new GoogleGenAI({ apiKey });
+      
       let finalPrompt = prompt;
 
-      // 1. Magic Prompt (Opcional)
-      if (isMagicPrompt && !referenceImage) {
-         setGenerationStatus('✨ Melhorando Prompt...');
+      // 1. Magic Prompt (Se ativado ou prompt curto, aumenta a complexidade)
+      if ((isMagicPrompt || prompt.length < 30) && !referenceImage) {
+         setGenerationStatus('✨ Maximizando Complexidade...');
          finalPrompt = await enhancePromptAI(prompt, ai);
       }
       
-      // Adiciona sufixos de qualidade
+      // Adiciona sufixos de alta fidelidade
       finalPrompt += QUALITY_MODIFIERS;
-      const ratioText = ` . aspect ratio ${aspectRatio.replace(':', ' by ')}`;
 
       let imageUrl = '';
       let usedModel = '';
 
-      // Decisão de Modelo
-      // Se tiver imagem de referência OU estiver em modo Turbo -> Usa Flash Image
-      const useFlash = isTurboMode || !!referenceImage;
+      // LÓGICA DE SELEÇÃO DE MODELO E FORMATO
+      // Gemini Flash Image (Turbo) gera nativamente 1:1 (Quadrado).
+      // Para garantir formatos como 9:16 ou 16:9, precisamos usar o Imagen 4.
+      // Se o usuário tiver uma imagem de referência, somos obrigados a usar Flash (pela API atual).
+
+      const isSquare = aspectRatio === AspectRatio.SQUARE;
+      const hasReference = !!referenceImage;
+      
+      // Forçamos HQ se o usuário quer um formato específico (não quadrado) E não está usando referência
+      const forceHqForAspectRatio = !isSquare && !hasReference;
+      
+      const useFlash = (isTurboMode && !forceHqForAspectRatio) || hasReference;
 
       if (useFlash) {
-        setGenerationStatus('⚡ Gerando (Flash)...');
+        setGenerationStatus('⚡ Gerando (Turbo)...');
         usedModel = MODEL_IDS.FAST_REFERENCE;
         
-        const parts: any[] = [{ text: finalPrompt + ratioText }];
+        // Flash Image não suporta config de aspect ratio nativa, então adicionamos ao prompt
+        // sabendo que o resultado pode tender ao 1:1 se não for Imagen
+        const ratioPrompt = ` . aspect ratio ${aspectRatio.replace(':', ' by ')}`;
+        const parts: any[] = [{ text: finalPrompt + ratioPrompt }];
         
         if (referenceImage) {
           parts.unshift({
@@ -257,7 +292,8 @@ const App: React.FC = () => {
 
       } else {
         // Modo High Quality (Imagen)
-        setGenerationStatus('🎨 Renderizando (Imagen 4)...');
+        const statusMsg = forceHqForAspectRatio ? '📐 Ajustando Formato (HQ)...' : '🎨 Renderizando (Alta Fidelidade)...';
+        setGenerationStatus(statusMsg);
         usedModel = MODEL_IDS.HIGH_QUALITY;
         
         try {
@@ -266,7 +302,7 @@ const App: React.FC = () => {
               prompt: finalPrompt, 
               config: {
                 numberOfImages: 1,
-                aspectRatio: aspectRatio as any,
+                aspectRatio: aspectRatio as any, // Passa o formato exato (ex: '9:16')
                 outputMimeType: 'image/jpeg'
               }
            });
@@ -275,17 +311,18 @@ const App: React.FC = () => {
            if (b64) {
              imageUrl = `data:image/jpeg;base64,${b64}`;
            } else {
-             throw new Error("Imagen 4 sem resposta.");
+             throw new Error("Sem resposta do modelo HQ.");
            }
         } catch (imagenError: any) {
-           // Fallback automático para Flash se Imagen falhar (cotas/permissão)
-           console.warn("Imagen fallback:", imagenError);
-           setGenerationStatus('⚠️ Alternando para Turbo...');
+           // Fallback automático para Flash
+           console.warn("Fallback executado:", imagenError);
+           setGenerationStatus('⚠️ Alternando para Turbo (Fallback)...');
            usedModel = 'gemini-2.5-flash-image (fallback)';
            
+           const ratioPrompt = ` . aspect ratio ${aspectRatio.replace(':', ' by ')}`;
            const backupResponse = await ai.models.generateContent({
               model: 'gemini-2.5-flash-image',
-              contents: { parts: [{ text: finalPrompt + ratioText }] },
+              contents: { parts: [{ text: finalPrompt + ratioPrompt }] },
               config: { responseModalities: [Modality.IMAGE] }
            });
            
@@ -293,7 +330,7 @@ const App: React.FC = () => {
            if (imgPart?.inlineData) {
              imageUrl = `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
            } else {
-             throw new Error("Falha na geração. Tente um prompt mais simples.");
+             throw new Error("Falha na geração. Tente simplificar o prompt.");
            }
         }
       }
@@ -314,14 +351,13 @@ const App: React.FC = () => {
       }
       
     } catch (error: any) {
-      console.error("Generation Error:", error);
-      let msg = "Ocorreu um erro inesperado.";
+      console.error("Erro de Geração:", error);
+      let msg = "Ocorreu um erro inesperado na comunicação com a API.";
       
       if (error.message) {
           if (error.message.includes('SAFETY')) msg = "Conteúdo bloqueado pelos filtros de segurança.";
-          else if (error.message.includes('429')) msg = "Muitas requisições. Aguarde um momento.";
-          else if (error.message.includes('API key') || error.message.includes('403')) msg = "Chave de API inválida ou sem permissão.";
-          else msg = "Falha ao criar imagem. Tente novamente.";
+          else if (error.message.includes('429')) msg = "Limite de requisições excedido. Aguarde um momento.";
+          else if (error.message.includes('403') || error.message.includes('API key') || error.message.includes('401')) msg = "Erro de Autenticação: Chave inválida ou não autorizada.";
       }
       setErrorMsg(msg);
     } finally {
@@ -359,11 +395,74 @@ const App: React.FC = () => {
     glass: 'backdrop-blur-xl bg-black/60',
   };
 
+  const activeApiKey = userApiKey || process.env.API_KEY;
+  const isSquare = aspectRatio === AspectRatio.SQUARE;
+
   return (
     <div className={`min-h-screen w-full ${design.bg} text-zinc-200 font-sans selection:bg-red-500/30`}>
       
       {/* Background Ambient Light */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full h-[600px] max-w-[1000px] bg-red-900/20 blur-[130px] rounded-full pointer-events-none z-0" />
+
+      {/* SETTINGS MODAL */}
+      {showSettings && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="w-full max-w-md bg-[#0c0c0e] border border-red-900/30 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden">
+              <div className="p-6 space-y-6 relative">
+                 {/* Header Modal */}
+                 <div className="flex justify-between items-center border-b border-white/5 pb-4">
+                    <div className="flex items-center gap-3">
+                       <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+                          <Settings className="text-red-500" size={20} />
+                       </div>
+                       <div>
+                          <h3 className="font-bold text-white text-lg">Configuração do Sistema</h3>
+                          <p className="text-xs text-zinc-500 uppercase tracking-wider">Credenciais de Acesso</p>
+                       </div>
+                    </div>
+                    <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+                       <X size={20} className="text-zinc-500" />
+                    </button>
+                 </div>
+
+                 {/* Body Modal */}
+                 <div className="space-y-4">
+                    <div className="space-y-2">
+                       <label className="text-xs font-bold text-zinc-400 ml-1 flex items-center gap-2">
+                          <Key size={12} />
+                          API KEY
+                       </label>
+                       <div className="relative group">
+                          <input 
+                             type="password"
+                             value={tempKey}
+                             onChange={(e) => setTempKey(e.target.value)}
+                             placeholder="sk-..."
+                             className="w-full bg-black border border-white/10 rounded-xl px-4 py-3.5 text-sm text-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none transition-all placeholder:text-zinc-700"
+                          />
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                             {tempKey ? <Check size={14} className="text-green-500" /> : <ShieldAlert size={14} className="text-zinc-700" />}
+                          </div>
+                       </div>
+                       <p className="text-[10px] text-zinc-600 leading-relaxed px-1">
+                          Sua chave é armazenada localmente no navegador. Nenhuma informação é enviada para servidores externos além da Google API.
+                       </p>
+                    </div>
+                 </div>
+
+                 {/* Footer Modal */}
+                 <div className="pt-2">
+                    <button 
+                      onClick={handleSaveSettings}
+                      className="w-full py-3.5 rounded-xl bg-zinc-100 text-black font-bold text-sm hover:bg-white hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg shadow-white/5"
+                    >
+                       SALVAR CONFIGURAÇÃO
+                    </button>
+                 </div>
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* CONTAINER */}
       <div className="max-w-[480px] mx-auto min-h-screen relative border-x border-white/5 bg-black shadow-[0_0_60px_rgba(0,0,0,0.9)] z-10">
@@ -379,8 +478,8 @@ const App: React.FC = () => {
                 <span className="text-[10px] font-medium text-red-500 tracking-widest uppercase mt-0.5">Red Edition</span>
              </div>
           </div>
-          <div className="flex items-center gap-2">
-            {process.env.API_KEY ? (
+          <div className="flex items-center gap-3">
+            {activeApiKey ? (
                <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-900/20 border border-green-500/20">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></div>
                   <span className="text-[9px] font-bold text-green-500 tracking-wider uppercase">Online</span>
@@ -388,9 +487,15 @@ const App: React.FC = () => {
             ) : (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-red-900/20 border border-red-500/20">
                   <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div>
-                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Offline</span>
+                  <span className="text-[9px] font-bold text-red-500 tracking-wider uppercase">Config</span>
                </div>
             )}
+            <button 
+              onClick={handleOpenSettings} 
+              className="w-8 h-8 rounded-full bg-zinc-900 border border-white/5 flex items-center justify-center hover:bg-zinc-800 transition-colors group"
+            >
+               <Settings size={14} className="text-zinc-500 group-hover:text-white transition-colors group-hover:rotate-90 duration-500" />
+            </button>
           </div>
         </header>
 
@@ -403,7 +508,7 @@ const App: React.FC = () => {
             <textarea 
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="O que sua imaginação deseja criar hoje?"
+              placeholder="Descreva sua visão com detalhes..."
               className={`relative w-full h-40 rounded-[24px] p-6 text-[15px] leading-relaxed resize-none outline-none transition-all duration-300 ${design.input} focus:bg-[#0f0f10] shadow-inner`}
             />
             
@@ -441,7 +546,7 @@ const App: React.FC = () => {
                   : 'bg-[#09090b] border-white/5 text-zinc-500 hover:bg-zinc-900 hover:border-white/10'}`}
             >
               <Zap size={14} className={isTurboMode ? "fill-orange-500" : ""} />
-              {isTurboMode ? "Turbo ON" : "HQ Mode"}
+              {isTurboMode ? (isSquare ? "Turbo ON" : "Turbo (Auto HQ)") : "HQ Mode"}
             </button>
             <button 
               onClick={() => setIsMagicPrompt(!isMagicPrompt)}
